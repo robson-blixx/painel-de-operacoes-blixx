@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<script>
+'use strict';
+// Each BL2 workspace runs the same tested UI with its own saved reference and choices.
+const bl2Frequency=new URLSearchParams(location.search).get('bl2-frequency');
+const isBL2Frequency=['com','sem'].includes(bl2Frequency);
+if(!isBL2Frequency){
+ // Preserve the former BL2 reference in Com frequência once; retain original keys as backup.
+ try{if(localStorage.getItem('bl2-frequency-migration-v1')!=='done'){
+  for(const key of ['bl2-route-reference-v1','blx-organizador-unificado-v2-bl2','blx-vinculos-humanos-v1-bl2']){
+   const old=localStorage.getItem(key),target=key+'-frequency-com';
+   if(old!==null&&localStorage.getItem(target)===null)localStorage.setItem(target,old);
+  }
+  localStorage.setItem('bl2-frequency-migration-v1','done');
+ }}catch{}
+}
+const panelStorage=isBL2Frequency?{
+ key(key){return /^(bl2-|rota-import-gate-v1-BL2$)|^blx-(organizador-unificado-v2|vinculos-humanos-v1)-bl2$/.test(key)?key+'-frequency-'+bl2Frequency:key;},
+ getItem(key){return localStorage.getItem(this.key(key));},
+ setItem(key,value){localStorage.setItem(this.key(key),value);},
+ removeItem(key){localStorage.removeItem(this.key(key));}
+}:localStorage;
+if(isBL2Frequency){
+ document.documentElement.classList.add('bl2-frequency-frame');
+ const style=document.createElement('style');style.textContent='.bl2-frequency-frame body{background:#07111f;min-height:0;margin:0}.bl2-frequency-frame main{padding:0;max-width:none}.bl2-frequency-frame .hero,.bl2-frequency-frame #operation-blx,.bl2-frequency-frame main>.robot-panel:not(#operation-bl2),.bl2-frequency-frame body>header,.bl2-frequency-frame nav{display:none!important}.bl2-frequency-frame #operation-bl2{margin:0!important}.bl2-frequency-frame #bl2-optional{margin-bottom:12px}';document.head.append(style);
+}
+window.addEventListener('DOMContentLoaded',()=>{
+ if(isBL2Frequency){
+  const title='BL2 — '+(bl2Frequency==='com'?'Com frequência':'Sem frequência');
+  document.title=title;document.querySelector('#operation-bl2 h2').textContent=title;
+  document.querySelector('#operation-bl2 .mode').textContent=bl2Frequency==='com'?'COM FREQUÊNCIA':'SEM FREQUÊNCIA';
+  document.querySelector('#card-bl2 h2').textContent=title+' — organização opcional';
+  const snapshot=saveSnapshot;saveSnapshot=async function(source,operation,env,phase){
+   if(operation==='BL2'){const prefix=title+' · ';source={...source,source:String(source.source).startsWith(prefix)?source.source:prefix+source.source};}
+   return snapshot(source,operation,env,phase);
+  };
+  const originalStart=startRobot;startRobot=async function(operation,mode='real'){
+   if(operation!=='BL2')throw Error('Este ambiente é exclusivo da BL2.');
+   if(!readyForRobot('BL2')||!bl2Sheet)throw Error('Confira e aprove a planilha deste ambiente antes de iniciar.');
+   if(isOperationBusy('BL2')||submitting)throw Error('A BL2 já está em andamento.');
+   // The backend runs one BL2 at a time. Rebind an already approved, unchanged
+   // local sheet if the other frequency was saved after this one.
+   const current=await(await fetch('/api/operation-sheet?operation=BL2')).json();
+   if(current.sheet?.id!==savedBL2.id){
+    const phase=savedBL2.phase;submitting=true;updateButtons();
+    try{savedBL2=await saveSnapshot(bl2Sheet,'BL2','bl2',phase);rememberGate(savedBL2);}
+    finally{submitting=false;updateButtons();}
+   }
+   // Share the visible credentials and concurrency control with the main monitor.
+   if(window.parent!==window){for(const key of ['user','password'])monitor('BL2',key).value=window.parent.document.getElementById('monitor-BL2-'+key).value;$('parallel-mode').checked=window.parent.document.getElementById('parallel-mode').checked;}
+   await originalStart(operation,mode);
+   if(window.parent!==window){window.parent.document.getElementById('monitor-BL2-password').value='';window.parent.document.getElementById('monitor-BL2').scrollIntoView({behavior:'smooth'});}
+  };
+  const download=downloadWorkbook;downloadWorkbook=function(wb,name){return download(wb,name.replace(/\.xlsx$/i,'_'+(bl2Frequency==='com'?'COM_FREQUENCIA':'SEM_FREQUENCIA')+'.xlsx'));};
+  const savedDownload=downloadSavedRevision;downloadSavedRevision=async function(operation){
+   if(operation!=='BL2')return savedDownload(operation);
+   if(!bl2Sheet)throw Error('Nenhuma planilha carregada neste ambiente.');
+   await ensureXlsx();const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(bl2Sheet.table),'Report');downloadWorkbook(wb,'PLANILHA_BL2.xlsx');
+  };
+  // Keep the shared monitor's parallel permission current before enabling Start.
+  const buttons=updateButtons;updateButtons=function(){if(window.parent!==window)$('parallel-mode').checked=window.parent.document.getElementById('parallel-mode').checked;buttons();};
+  const report=()=>{if(window.parent!==window)window.parent.postMessage({type:'bl2-frequency-height',frequency:bl2Frequency,height:Math.ceil(document.querySelector('main').getBoundingClientRect().height)+24},location.origin);};
+  new ResizeObserver(report).observe(document.querySelector('main'));report();
+  return;
+ }
+ const old=document.getElementById('operation-bl2');old.hidden=true;
+ const group=document.createElement('section');group.id='bl2-frequency-workspaces';
+ group.innerHTML='<div class="operation-heading"><span class="mode">OPERAÇÃO BL2</span><h2>BL2 — com frequência e sem frequência</h2><p>Cada ambiente mantém seu próprio modelo e suas alterações. No portal, ambos usam BL2. Execute uma BL2 por vez.</p></div>';
+ old.after(group);const frames=new Map();
+ for(const frequency of ['com','sem']){const frame=document.createElement('iframe');frame.src='./operacoes.html?bl2-frequency='+frequency;frame.title='BL2 — '+(frequency==='com'?'Com frequência':'Sem frequência');frame.style.cssText='display:block;width:100%;height:700px;border:0;margin:20px 0;border-radius:18px';group.append(frame);frames.set(frequency,frame);}
+ window.addEventListener('message',event=>{const data=event.data,frame=frames.get(data?.frequency);if(event.origin!==location.origin||!frame||event.source!==frame.contentWindow||data.type!=='bl2-frequency-height'||!Number.isFinite(data.height))return;frame.style.height=Math.max(450,Math.min(12000,data.height))+'px';});
+});
+
+</script>
+<script src="./web-mode.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel de Operações Blixx</title>
+<style>
+:root{--bg:#07111f;--panel:#0d1b2d;--panel2:#11243b;--line:#27435f;--ink:#eff7ff;--muted:#9fb7cd;--cyan:#1ad6d1;--green:#45d78b;--amber:#f4b64e;--red:#ff7181;--blue:#528bff}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% -10%,#17345a 0,transparent 30rem),var(--bg);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:1440px;margin:auto;padding:32px 24px 64px}.hero{display:flex;justify-content:space-between;gap:24px;align-items:end;margin-bottom:28px}.eyebrow{margin:0 0 8px;color:var(--cyan);font-size:.75rem;font-weight:800;letter-spacing:.13em;text-transform:uppercase}.hero h1{font-size:clamp(1.7rem,3vw,2.5rem);margin:0}.hero p{color:var(--muted);margin:10px 0 0;max-width:760px;line-height:1.55}.rule{background:#0b2030;border:1px solid #24536a;padding:13px 16px;border-radius:12px;color:#cceaf5;font-size:.9rem;line-height:1.45;max-width:360px}.workspace{border:1px solid var(--line);border-radius:18px;background:linear-gradient(135deg,rgba(17,36,59,.95),rgba(9,22,37,.96));overflow:hidden;margin:20px 0;box-shadow:0 14px 40px rgba(0,0,0,.22)}.workspace-head{padding:22px 24px;display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:1px solid var(--line)}.workspace-head h2{font-size:1.2rem;margin:0}.workspace-head p{margin:5px 0 0;color:var(--muted);font-size:.9rem}.mode{font-size:.73rem;font-weight:800;padding:7px 10px;border-radius:99px;letter-spacing:.08em;text-transform:uppercase;background:#113458;color:#87e7ff;white-space:nowrap}.controls{display:grid;grid-template-columns:repeat(2,minmax(180px,1fr)) auto auto auto auto;gap:12px;padding:18px 24px;background:rgba(4,15,26,.25)}.upload{display:flex;min-height:58px;align-items:center;padding:10px 13px;border:1px dashed #467294;border-radius:11px;background:#0a1828;cursor:pointer;transition:.16s}.upload:hover{border-color:var(--cyan);background:#0b2031}.upload strong{font-size:.86rem;display:block}.upload span{display:block;color:var(--muted);font-size:.74rem;margin-top:3px}.upload input{display:none}.action{border:0;border-radius:10px;padding:0 16px;min-height:44px;align-self:center;color:#02131d;background:var(--cyan);font-weight:800;cursor:pointer;white-space:nowrap}.action:hover{filter:brightness(1.08)}.action.secondary{background:#17324e;color:#d9ecfb;border:1px solid #406180}.action.export{background:var(--green)}.action:disabled{opacity:.45;cursor:not-allowed}.content{padding:0 24px 24px}.message{display:none;margin:17px 0 0;border:1px solid var(--line);border-radius:10px;padding:12px 14px;color:var(--muted);font-size:.9rem}.message.show{display:block}.message.error{border-color:#8e3e4c;color:#ffd0d7;background:#2b141b}.message.ok{border-color:#27664e;color:#bbf6d6;background:#0b281f}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:18px 0}.metric{border:1px solid var(--line);border-radius:12px;padding:15px;background:#091827}.metric label{color:var(--muted);font-size:.76rem}.metric strong{font-size:1.55rem;display:block;margin-top:4px}.metric.good strong{color:var(--green)}.metric.warn strong{color:var(--amber)}.preview{display:none;border:1px solid var(--line);border-radius:12px;overflow:auto;max-height:460px;background:#071523}.preview.show{display:block}table{border-collapse:collapse;width:100%;font-size:.81rem}th{position:sticky;top:0;background:#10253b;color:#bbd7ee;text-align:left;z-index:1}th,td{padding:10px 12px;border-bottom:1px solid #1c3851;white-space:nowrap}.preview tbody tr{cursor:default}.preview tbody tr:hover{background:#0d2438}.preview td.editing{outline:1px solid var(--cyan);background:#12344a;color:#fff}.tag{display:inline-block;padding:4px 7px;border-radius:7px;font-size:.69rem;font-weight:800}.tag.ok{background:#153d2c;color:#89f0b8}.tag.pending{background:#493616;color:#ffd281}.foot{padding:13px 0 0;color:var(--muted);font-size:.78rem;line-height:1.4}.muted{color:var(--muted)}@media(max-width:1100px){.controls{grid-template-columns:repeat(3,1fr)}.controls .action{min-height:52px}}@media(max-width:700px){main{padding:22px 14px 40px}.hero{display:block}.rule{margin-top:16px}.controls{grid-template-columns:1fr}.workspace-head{padding:18px}.content{padding:0 14px 14px}.controls{padding:14px}.metrics{grid-template-columns:repeat(2,1fr)}}
+.decision-panel{margin:18px 0;padding:16px;border:1px solid #80652d;border-radius:12px;background:#152235}.decision-panel h3{margin:0 0 8px}.decision-list{display:grid;gap:12px}.decision-item{padding:12px;border:1px solid #38516d;border-radius:8px}.decision-item p{margin:0 0 8px;white-space:normal}.decision-item select{max-width:100%;width:100%;padding:10px;color:#eff7ff;background:#091827;border:1px solid #557390;border-radius:8px}.decision-item .action{margin:10px 10px 0 0}.decision-note{color:#9fb7cd;font-size:.85rem;line-height:1.5}.decision-feedback{color:#ffd281;margin-top:8px}
+.remove-attachment{margin-top:6px;width:100%;font-size:.75rem;min-height:30px}.attachment{min-width:0}.bl2-optional{margin-top:20px}.bl2-optional>summary{cursor:pointer;font-weight:700;padding:14px}
+.robot-panel .workspace .upload input[type="file"]{display:none}.controls{grid-template-columns:repeat(4,minmax(0,1fr))}.controls>.attachment{grid-column:span 2}.controls>.action{min-height:52px;white-space:normal}.approval-steps{color:#9fb7cd;font-size:.9rem;line-height:1.6}@media(max-width:700px){.controls{grid-template-columns:1fr}.controls>.attachment{grid-column:1/-1}}
+[hidden]{display:none!important}.controls{grid-template-columns:repeat(5,minmax(0,1fr))}.controls>.attachment{grid-column:span 2}.controls>.attachment:nth-child(2){grid-column:span 3}@media(max-width:700px){.controls{grid-template-columns:1fr}.controls>.attachment,.controls>.attachment:nth-child(2){grid-column:1/-1}}#card-com .controls,#card-sem .controls{grid-template-columns:repeat(10,minmax(0,1fr))}#card-com .controls>.attachment,#card-sem .controls>.attachment{grid-column:span 3}#card-com .controls>.attachment:first-child,#card-sem .controls>.attachment:first-child{grid-column:span 4}#card-com .controls>.action,#card-sem .controls>.action{grid-column:span 2}@media(max-width:700px){#card-com .controls,#card-sem .controls{grid-template-columns:1fr}#card-com .controls>.attachment,#card-sem .controls>.attachment,#card-com .controls>.attachment:first-child,#card-sem .controls>.attachment:first-child,#card-com .controls>.action,#card-sem .controls>.action{grid-column:1/-1}}@media(max-width:850px){#parallel-monitors{grid-template-columns:1fr!important}}.operation-monitor{padding:16px;border:1px solid #346885;border-radius:12px;background:#071827}</style>
+<link rel="stylesheet" href="./robot-panel.css">
+</head>
+<body>
+<main>
+  <header class="hero">
+    <div>
+      <p class="eyebrow">BLIXX · Operação BLX</p>
+      <h1>Painel de Operações Blixx</h1>
+      <p>Modelos e decisões independentes por ambiente e operação. Cidade + Bairro + Loja/Embarcador consulta o modelo unificado para obter Motorista, Rota, Placa e Nome UNIGIS.</p>
+    </div>
+    <div class="rule">A organização nunca troca uma ordem por aproximação. Ausência, conflito ou múltiplas opções exigem decisão humana. Cidade → Bairro → Loja determina motorista e rota do modelo. A rota diária fica apenas como referência de conferência.</div>
+  </header>
+
+  <section class="workspace" id="card-com">
+    <div class="workspace-head">
+      <div><h2>Com frequência</h2><p>Ambiente superior · modelo unificado independente</p></div>
+      <span class="mode">COM FREQUÊNCIA</span>
+    </div>
+    <div class="controls">
+      <div class="attachment"><label class="upload"><input id="com-model" type="file" accept=".xlsx,.xls"><div><strong>Modelo de Lojas e Motoristas</strong><span>Obrigatório · modelo unificado BLX</span></div></label><button class="action secondary remove-attachment" id="com-model-remove" onclick="removeAttachment('com','model')">Excluir modelo</button></div>
+      <div class="attachment"><label class="upload"><input id="com-client" type="file" accept=".xlsx,.xls"><div><strong>Planilha do cliente</strong><span>Obrigatória · arquivo do dia</span></div></label><button class="action secondary remove-attachment" id="com-client-remove" onclick="removeAttachment('com','client')">Excluir planilha do cliente</button></div>
+      <div class="attachment"><label class="upload"><input id="com-custom" type="file" accept=".xlsx,.xls"><div><strong>Via do Cliente Personalizada</strong><span>Opcional · formato alternativo BLX</span></div></label><button class="action secondary remove-attachment" id="com-custom-remove" onclick="removeAttachment('com','custom')">Excluir via personalizada</button></div>
+      <button class="action" onclick="organize('com')">Organizar</button>
+      <button class="action secondary" id="com-view" onclick="togglePreview('com')" disabled>Visualizar</button>
+      <button class="action export" id="com-export" onclick="exportResult('com')" disabled>Baixar planilha organizada</button>
+      <button class="action export" id="com-use-approved" onclick="document.getElementById('com-approved').click()">Utilizar planilha aprovada</button><input hidden id="com-approved" type="file" accept=".xlsx,.xls" onchange="loadApprovedFile('com')">
+    </div>
+    <div class="content"><div class="foot" id="com-approval-note">Após receber a aprovação do cliente, carregue o arquivo em “Carregar planilha aprovada”.</div><button class="action secondary" id="com-approved-remove" onclick="removeApprovedFile('com')" hidden>Excluir planilha aprovada</button><div id="com-message" class="message"></div><div id="com-metrics" class="metrics" hidden></div><div id="com-decisions"></div><div id="com-preview" class="preview"></div><div class="foot">Carregue o modelo unificado de lojas e motoristas uma vez neste ambiente. No uso diário, troque somente a planilha do cliente.</div></div>
+  </section>
+
+  <section class="workspace" id="card-sem">
+    <div class="workspace-head">
+      <div><h2>Sem frequência</h2><p>Ambiente inferior · modelo unificado independente</p></div>
+      <span class="mode">SEM FREQUÊNCIA</span>
+    </div>
+    <div class="controls">
+      <div class="attachment"><label class="upload"><input id="sem-model" type="file" accept=".xlsx,.xls"><div><strong>Modelo de Lojas e Motoristas</strong><span>Obrigatório · modelo unificado BLX</span></div></label><button class="action secondary remove-attachment" id="sem-model-remove" onclick="removeAttachment('sem','model')">Excluir modelo</button></div>
+      <div class="attachment"><label class="upload"><input id="sem-client" type="file" accept=".xlsx,.xls"><div><strong>Planilha do cliente</strong><span>Obrigatória · arquivo do dia</span></div></label><button class="action secondary remove-attachment" id="sem-client-remove" onclick="removeAttachment('sem','client')">Excluir planilha do cliente</button></div>
+      <div class="attachment"><label class="upload"><input id="sem-custom" type="file" accept=".xlsx,.xls"><div><strong>Via do Cliente Personalizada</strong><span>Opcional · formato alternativo BLX</span></div></label><button class="action secondary remove-attachment" id="sem-custom-remove" onclick="removeAttachment('sem','custom')">Excluir via personalizada</button></div>
+      <button class="action" onclick="organize('sem')">Organizar</button>
+      <button class="action secondary" id="sem-view" onclick="togglePreview('sem')" disabled>Visualizar</button>
+      <button class="action export" id="sem-export" onclick="exportResult('sem')" disabled>Baixar planilha organizada</button>
+      <button class="action export" id="sem-use-approved" onclick="document.getElementById('sem-approved').click()">Utilizar planilha aprovada</button><input hidden id="sem-approved" type="file" accept=".xlsx,.xls" onchange="loadApprovedFile('sem')">
+    </div>
+    <div class="content"><div class="foot" id="sem-approval-note">Após receber a aprovação do cliente, carregue o arquivo em “Carregar planilha aprovada”.</div><button class="action secondary" id="sem-approved-remove" onclick="removeApprovedFile('sem')" hidden>Excluir planilha aprovada</button><div id="sem-message" class="message"></div><div id="sem-metrics" class="metrics" hidden></div><div id="sem-decisions"></div><div id="sem-preview" class="preview"></div><div class="foot">Carregue o modelo unificado de lojas e motoristas uma vez neste ambiente. No uso diário, troque somente a planilha do cliente.</div></div>
+  </section>
+  <section class="workspace" id="card-bl2">
+    <div class="workspace-head">
+      <div><h2>BL2 — organização opcional</h2><p>Use somente quando a planilha BL2 precisar ser organizada</p></div>
+      <span class="mode">BL2</span>
+    </div>
+    <div class="controls">
+      <div class="attachment"><label class="upload"><input id="bl2-model" type="file" accept=".xlsx,.xls"><div><strong>Modelo de Lojas e Motoristas</strong><span>Obrigatório · modelo unificado BL2</span></div></label><button class="action secondary remove-attachment" id="bl2-model-remove" onclick="removeAttachment('bl2','model')">Excluir modelo</button></div>
+      <div class="attachment"><label class="upload"><input id="bl2-client" type="file" accept=".xlsx,.xls"><div><strong>Planilha do cliente</strong><span>Obrigatória · arquivo do dia</span></div></label><button class="action secondary remove-attachment" id="bl2-client-remove" onclick="removeAttachment('bl2','client')">Excluir planilha do cliente</button></div>
+      <button class="action" onclick="organize('bl2')">Organizar</button>
+      <button class="action secondary" id="bl2-view" onclick="togglePreview('bl2')" disabled>Visualizar</button>
+      <button class="action export" id="bl2-export" onclick="exportResult('bl2')" disabled>Baixar planilha organizada</button>
+      <button class="action export" id="bl2-use-approved" onclick="document.getElementById('bl2-approved').click()">Utilizar planilha aprovada</button><input hidden id="bl2-approved" type="file" accept=".xlsx,.xls" onchange="loadApprovedFile('bl2')">
+    </div>
+    <div class="content"><div class="foot" id="bl2-approval-note">Após receber a aprovação do cliente, carregue o arquivo em “Carregar planilha aprovada”.</div><button class="action secondary" id="bl2-approved-remove" onclick="removeApprovedFile('bl2')" hidden>Excluir planilha aprovada</button><div id="bl2-message" class="message"></div><div id="bl2-metrics" class="metrics" hidden></div><div id="bl2-decisions"></div><div id="bl2-preview" class="preview"></div><div class="foot">Carregue o modelo unificado de lojas e motoristas uma vez neste ambiente. No uso diário, troque somente a planilha do cliente.</div></div>
+  </section>
+</main>
+
+<script>
+const states = { com: {}, sem: {}, bl2: {} };
+const savedBases={com:{},sem:{},bl2:{}};
+function baseStorageKey(env){return 'blx-organizador-unificado-v2-'+env;}
+for(const env of ['com','sem','bl2']){
+ try{const saved=JSON.parse(panelStorage.getItem(baseStorageKey(env))||'{}');if(Array.isArray(saved.model))savedBases[env]=saved;}catch{}
+}
+const legacyCatalogSeed={"signature":"3708675a5954f3ddae43882a72fa41549aa5fd11950166cd31335fe16e589199","rows":[{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"GELSON PEREIRA RUFINO","rota":"1","placa":"FQJ7E97","unigis":"PEREIRA RUFINO GELSON","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"GEANNE JONUZZI NUNES LABANCA LAURENTINO","rota":"2","placa":"RMS2H68","unigis":"NUNES LABLANCA LAURENTIN GEANNE JONUZZI","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"GEANNE JONUZZI NUNES LABANCA LAURENTINO","rota":"2","placa":"RMS2H68","unigis":"NUNES LABLANCA LAURENTIN GEANNE JONUZZI","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JOSE NILTO DE SOUZA","rota":"3","placa":"TAT1I41","unigis":"DE SOUZA JOSE NILTO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"NATANAEL DE SOUZA","rota":"4","placa":"BAP8F31","unigis":"DE SOUZA NATANAEL","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"NATANAEL DE SOUZA","rota":"4","placa":"BAP8F31","unigis":"DE SOUZA NATANAEL","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"NATANAEL DE SOUZA","rota":"4","placa":"BAP8F31","unigis":"DE SOUZA NATANAEL","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JULIANO ANTONIO FERREIRA","rota":"5","placa":"SKV0C95","unigis":"ANTONIO FERREIRA JULIANO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JULIANO ANTONIO FERREIRA","rota":"5","placa":"SKV0C95","unigis":"ANTONIO FERREIRA JULIANO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"VALDIR ORCI JUNIOR","rota":"6","placa":"RFS5H31","unigis":"ORCI JUNIOR VALDIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"VALDIR ORCI JUNIOR","rota":"6","placa":"RFS5H31","unigis":"ORCI JUNIOR VALDIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"VALDIR ORCI JUNIOR","rota":"6","placa":"RFS5H31","unigis":"ORCI JUNIOR VALDIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"VALDIR ORCI JUNIOR","rota":"6","placa":"RFS5H31","unigis":"ORCI JUNIOR VALDIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"VALDIR ORCI JUNIOR","rota":"6","placa":"RFS5H31","unigis":"ORCI JUNIOR VALDIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"VALDIR ORCI JUNIOR","rota":"6","placa":"RFS5H31","unigis":"ORCI JUNIOR VALDIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"VALDIR ORCI JUNIOR","rota":"6","placa":"RFS5H31","unigis":"ORCI JUNIOR VALDIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"VALDIR ORCI JUNIOR","rota":"6","placa":"RFS5H31","unigis":"ORCI JUNIOR VALDIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"VALDIR ORCI JUNIOR","rota":"6","placa":"RFS5H31","unigis":"ORCI JUNIOR VALDIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"VINICIUS WALTER DOS SANTOS LIMA","rota":"7","placa":"QXC4G84","unigis":"DOS SANTOS LIMA VINICIUS WALTER","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"VINICIUS WALTER DOS SANTOS LIMA","rota":"7","placa":"QXC4G84","unigis":"DOS SANTOS LIMA VINICIUS WALTER","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"VINICIUS WALTER DOS SANTOS LIMA","rota":"7","placa":"QXC4G84","unigis":"DOS SANTOS LIMA VINICIUS WALTER","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"VINICIUS WALTER DOS SANTOS LIMA","rota":"7","placa":"QXC4G84","unigis":"DOS SANTOS LIMA VINICIUS WALTER","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"CARLA ROSAURA MEDEIROS MASSARI","rota":"8","placa":"QIG6B22","unigis":"MEDEIROS MASSARI CARLA ROSAURA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"CARLA ROSAURA MEDEIROS MASSARI","rota":"8","placa":"QIG6B22","unigis":"MEDEIROS MASSARI CARLA ROSAURA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"CARLA ROSAURA MEDEIROS MASSARI","rota":"8","placa":"QIG6B22","unigis":"MEDEIROS MASSARI CARLA ROSAURA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"CARLA ROSAURA MEDEIROS MASSARI","rota":"8","placa":"QIG6B22","unigis":"MEDEIROS MASSARI CARLA ROSAURA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"CARLA ROSAURA MEDEIROS MASSARI","rota":"8","placa":"QIG6B22","unigis":"MEDEIROS MASSARI CARLA ROSAURA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"CARLA ROSAURA MEDEIROS MASSARI","rota":"8","placa":"QIG6B22","unigis":"MEDEIROS MASSARI CARLA ROSAURA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRESSA  SANTOS DE MENEZES CAMPOS","rota":"9","placa":"RXS8I82","unigis":"DE MENEZES CAMPOS ANDRESSA SANTOS","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRESSA  SANTOS DE MENEZES CAMPOS","rota":"9","placa":"RXS8I82","unigis":"DE MENEZES CAMPOS ANDRESSA SANTOS","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRESSA  SANTOS DE MENEZES CAMPOS","rota":"9","placa":"RXS8I82","unigis":"DE MENEZES CAMPOS ANDRESSA SANTOS","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRESSA  SANTOS DE MENEZES CAMPOS","rota":"9","placa":"RXS8I82","unigis":"DE MENEZES CAMPOS ANDRESSA SANTOS","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRESSA  SANTOS DE MENEZES CAMPOS","rota":"9","placa":"RXS8I82","unigis":"DE MENEZES CAMPOS ANDRESSA SANTOS","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRÉ VIANA","rota":"10","placa":"RAE2F14 ","unigis":"VIANA KAPCHUK ANDRE","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRÉ VIANA","rota":"10","placa":"RAE2F14 ","unigis":"VIANA KAPCHUK ANDRE","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRÉ VIANA","rota":"10","placa":"RAE2F14 ","unigis":"VIANA KAPCHUK ANDRE","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRÉ VIANA","rota":"10","placa":"RAE2F14 ","unigis":"VIANA KAPCHUK ANDRE","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRÉ VIANA","rota":"10","placa":"RAE2F14 ","unigis":"VIANA KAPCHUK ANDRE","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRÉ VIANA","rota":"10","placa":"RAE2F14 ","unigis":"VIANA KAPCHUK ANDRE","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRÉ VIANA","rota":"10","placa":"RAE2F14 ","unigis":"VIANA KAPCHUK ANDRE","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRÉ VIANA","rota":"10","placa":"RAE2F14 ","unigis":"VIANA KAPCHUK ANDRE","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRÉ VIANA","rota":"10","placa":"RAE2F14 ","unigis":"VIANA KAPCHUK ANDRE","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRÉ VIANA","rota":"10","placa":"RAE2F14 ","unigis":"VIANA KAPCHUK ANDRE","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRÉ VIANA","rota":"10","placa":"RAE2F14 ","unigis":"VIANA KAPCHUK ANDRE","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ANDRÉ VIANA","rota":"10","placa":"RAE2F14 ","unigis":"VIANA KAPCHUK ANDRE","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"MARCELO ANTONIO","rota":"11","placa":"QJZ1E99","unigis":"ANTONIO RODRIGUES MARCELO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"MARCELO ANTONIO","rota":"11","placa":"QJZ1E99","unigis":"ANTONIO RODRIGUES MARCELO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"MARCELO ANTONIO","rota":"11","placa":"QJZ1E99","unigis":"ANTONIO RODRIGUES MARCELO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"MARCELO ANTONIO","rota":"11","placa":"QJZ1E99","unigis":"ANTONIO RODRIGUES MARCELO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"MARCELO ANTONIO","rota":"11","placa":"QJZ1E99","unigis":"ANTONIO RODRIGUES MARCELO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JOSE ANTONIO ALEXANDRE VICENTE","rota":"12","placa":"QJG9261","unigis":"ALEXANDRE VICENTE JOSE ANTONIO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JOSE ANTONIO ALEXANDRE VICENTE","rota":"12","placa":"QJG9261","unigis":"ALEXANDRE VICENTE JOSE ANTONIO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JOSE ANTONIO ALEXANDRE VICENTE","rota":"12","placa":"QJG9261","unigis":"ALEXANDRE VICENTE JOSE ANTONIO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JOSE ANTONIO ALEXANDRE VICENTE","rota":"12","placa":"QJG9261","unigis":"ALEXANDRE VICENTE JOSE ANTONIO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JOSE ANTONIO ALEXANDRE VICENTE","rota":"12","placa":"QJG9261","unigis":"ALEXANDRE VICENTE JOSE ANTONIO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JOSE ANTONIO ALEXANDRE VICENTE","rota":"12","placa":"QJG9261","unigis":"ALEXANDRE VICENTE JOSE ANTONIO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JOSE ANTONIO ALEXANDRE VICENTE","rota":"12","placa":"QJG9261","unigis":"ALEXANDRE VICENTE JOSE ANTONIO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JOSE ANTONIO ALEXANDRE VICENTE","rota":"12","placa":"QJG9261","unigis":"ALEXANDRE VICENTE JOSE ANTONIO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JEAN CARLOS PEREIRA BORGES","rota":"13","placa":"QHO2J17","unigis":"PEREIRA BORGES JEAN CARLOS","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JEAN CARLOS PEREIRA BORGES","rota":"13","placa":"QHO2J17","unigis":"PEREIRA BORGES JEAN CARLOS","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JEAN CARLOS PEREIRA BORGES","rota":"13","placa":"QHO2J17","unigis":"PEREIRA BORGES JEAN CARLOS","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JEAN CARLOS PEREIRA BORGES","rota":"13","placa":"QHO2J17","unigis":"PEREIRA BORGES JEAN CARLOS","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JEAN CARLOS PEREIRA BORGES","rota":"13","placa":"QHO2J17","unigis":"PEREIRA BORGES JEAN CARLOS","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JOÃO CARLOS FERREIRA","rota":"14","placa":"BDZ5H52","unigis":"CARLOS FERREIRA JOAO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JOÃO CARLOS FERREIRA","rota":"14","placa":"BDZ5H52","unigis":"CARLOS FERREIRA JOAO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JOÃO CARLOS FERREIRA","rota":"14","placa":"BDZ5H52","unigis":"CARLOS FERREIRA JOAO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JOÃO CARLOS FERREIRA","rota":"14","placa":"BDZ5H52","unigis":"CARLOS FERREIRA JOAO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JOÃO CARLOS FERREIRA","rota":"14","placa":"BDZ5H52","unigis":"CARLOS FERREIRA JOAO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ADINAEL  LIMAS","rota":"15","placa":"QHS2J16","unigis":"LIMAS ADINAEL","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ADINAEL  LIMAS","rota":"15","placa":"QHS2J16","unigis":"LIMAS ADINAEL","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ROGER ALMEIDA LOPES","rota":"16","placa":"RLJ4C16","unigis":"ALMEIDA LOPES ROGER","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"PAULO CARDOZO","rota":"17","placa":"SIO6F19","unigis":"CARDOZO PAULO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"PAULO CARDOZO","rota":"17","placa":"SIO6F19","unigis":"CARDOZO PAULO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"GABRIEL WEMERSON SOUSA ALVES","rota":"18","placa":"SDS3F57","unigis":"SOUZA ALVES GABRIEL WEMERSON","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JONATA JEREMIAS RIBEIRO","rota":"19","placa":"BCH0E49","unigis":"JEREMIAS RIBEIRO JONATA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JONATA JEREMIAS RIBEIRO","rota":"19","placa":"BCH0E49","unigis":"JEREMIAS RIBEIRO JONATA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JONATA JEREMIAS RIBEIRO","rota":"19","placa":"BCH0E49","unigis":"JEREMIAS RIBEIRO JONATA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JONATA JEREMIAS RIBEIRO","rota":"19","placa":"BCH0E49","unigis":"JEREMIAS RIBEIRO JONATA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JONATA JEREMIAS RIBEIRO","rota":"19","placa":"BCH0E49","unigis":"JEREMIAS RIBEIRO JONATA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JONATA JEREMIAS RIBEIRO","rota":"19","placa":"BCH0E49","unigis":"JEREMIAS RIBEIRO JONATA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALAN SCHMITT MONTEIRO","rota":"20","placa":"FGH1G41","unigis":"SCHIMITT MONTEIRO ALLAN","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALAN SCHMITT MONTEIRO","rota":"20","placa":"FGH1G41","unigis":"SCHIMITT MONTEIRO ALLAN","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALAN SCHMITT MONTEIRO","rota":"20","placa":"FGH1G41","unigis":"SCHIMITT MONTEIRO ALLAN","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALAN SCHMITT MONTEIRO","rota":"20","placa":"FGH1G41","unigis":"SCHIMITT MONTEIRO ALLAN","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALAN SCHMITT MONTEIRO","rota":"20","placa":"FGH1G41","unigis":"SCHIMITT MONTEIRO ALLAN","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALAN SCHMITT MONTEIRO","rota":"20","placa":"FGH1G41","unigis":"SCHIMITT MONTEIRO ALLAN","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALAN SCHMITT MONTEIRO","rota":"20","placa":"FGH1G41","unigis":"SCHIMITT MONTEIRO ALLAN","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALAN SCHMITT MONTEIRO","rota":"20","placa":"FGH1G41","unigis":"SCHIMITT MONTEIRO ALLAN","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALAN SCHMITT MONTEIRO","rota":"20","placa":"FGH1G41","unigis":"SCHIMITT MONTEIRO ALLAN","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALAN SCHMITT MONTEIRO","rota":"20","placa":"FGH1G41","unigis":"SCHIMITT MONTEIRO ALLAN","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALAN SCHMITT MONTEIRO","rota":"20","placa":"FGH1G41","unigis":"SCHIMITT MONTEIRO ALLAN","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"SAMARA PAVESI","rota":"21","placa":"RKZ7J96","unigis":"PAVESI SAMARA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"SAMARA PAVESI","rota":"21","placa":"RKZ7J96","unigis":"PAVESI SAMARA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"SAMARA PAVESI","rota":"21","placa":"RKZ7J96","unigis":"PAVESI SAMARA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"SAMARA PAVESI","rota":"21","placa":"RKZ7J96","unigis":"PAVESI SAMARA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"SAMARA PAVESI","rota":"21","placa":"RKZ7J96","unigis":"PAVESI SAMARA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"SAMARA PAVESI","rota":"21","placa":"RKZ7J96","unigis":"PAVESI SAMARA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"FABRICIO CRISFIR ALMEIDA DINIZ","rota":"22","placa":"RXR0E79","unigis":"ALMEIDA DINIZ FABRICIO CRISFIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"FABRICIO CRISFIR ALMEIDA DINIZ","rota":"22","placa":"RXR0E79","unigis":"ALMEIDA DINIZ FABRICIO CRISFIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"FABRICIO CRISFIR ALMEIDA DINIZ","rota":"22","placa":"RXR0E79","unigis":"ALMEIDA DINIZ FABRICIO CRISFIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"FABRICIO CRISFIR ALMEIDA DINIZ","rota":"22","placa":"RXR0E79","unigis":"ALMEIDA DINIZ FABRICIO CRISFIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JULIANO ALVES BORGES","rota":"23","placa":"QJR4H02","unigis":"ALVEZ BORGES JULIANO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JULIANO ALVES BORGES","rota":"23","placa":"QJR4H02","unigis":"ALVEZ BORGES JULIANO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JULIANO ALVES BORGES","rota":"23","placa":"QJR4H02","unigis":"ALVEZ BORGES JULIANO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JULIANO ALVES BORGES","rota":"23","placa":"QJR4H02","unigis":"ALVEZ BORGES JULIANO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JULIANO ALVES BORGES","rota":"23","placa":"QJR4H02","unigis":"ALVEZ BORGES JULIANO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JULIANO ALVES BORGES","rota":"23","placa":"QJR4H02","unigis":"ALVEZ BORGES JULIANO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JULIANO ALVES BORGES","rota":"23","placa":"QJR4H02","unigis":"ALVEZ BORGES JULIANO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"JULIANO ALVES BORGES","rota":"23","placa":"QJR4H02","unigis":"ALVEZ BORGES JULIANO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"EMERSON FABIANO MARQUES MONTEIRO","rota":"24","placa":"QHD1445","unigis":"MAERQUES MONTEIRO EMERSON FABIANO","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALCEMAR DA CRUZ KRAUSS","rota":"25","placa":"JCQ4C19","unigis":"CRUZ KRAUSS ALCEMAR DA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALCEMAR DA CRUZ KRAUSS","rota":"25","placa":"JCQ4C19","unigis":"CRUZ KRAUSS ALCEMAR DA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALCEMAR DA CRUZ KRAUSS","rota":"25","placa":"JCQ4C19","unigis":"CRUZ KRAUSS ALCEMAR DA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALCEMAR DA CRUZ KRAUSS","rota":"25","placa":"JCQ4C19","unigis":"CRUZ KRAUSS ALCEMAR DA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ALCEMAR DA CRUZ KRAUSS","rota":"25","placa":"JCQ4C19","unigis":"CRUZ KRAUSS ALCEMAR DA","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ELOIR MEYER","rota":"26","placa":"QJD4E01","unigis":"MEYER ELOIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ELOIR MEYER","rota":"26","placa":"QJD4E01","unigis":"MEYER ELOIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ELOIR MEYER","rota":"26","placa":"QJD4E01","unigis":"MEYER ELOIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ELOIR MEYER","rota":"26","placa":"QJD4E01","unigis":"MEYER ELOIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ELOIR MEYER","rota":"26","placa":"QJD4E01","unigis":"MEYER ELOIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ELOIR MEYER","rota":"26","placa":"QJD4E01","unigis":"MEYER ELOIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ELOIR MEYER","rota":"26","placa":"QJD4E01","unigis":"MEYER ELOIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"ELOIR MEYER","rota":"26","placa":"QJD4E01","unigis":"MEYER ELOIR","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"MATHEUS PADILHA","rota":"27","placa":"RUX5G85","unigis":"PADILHA MATEUS","base":"BLX","status":"VINCULO_EXATO"},{"catalogOnly":true,"cidade":"","bairro":"","loja":"","motorista":"DOUGAS ALBINO","rota":"28","placa":"BDR4H35","unigis":"PINTO ALBINO DOUGLAS","base":"BLX","status":"VINCULO_EXATO"}]};
+async function enrichLegacyCatalog(model){
+ if(model.some(r=>r.catalogOnly))return model;
+ const payload=JSON.stringify(model.map(r=>[r.cidade,r.bairro,r.loja,r.motorista,r.rota,r.placa,r.unigis,r.status,r.reason,r.base].map(exactValue)));
+ const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(payload));const hash=[...new Uint8Array(bytes)].map(b=>b.toString(16).padStart(2,'0')).join('');
+ return hash===legacyCatalogSeed.signature?[...model,...legacyCatalogSeed.rows]:model;
+}
+const humanDecisions={com:{},sem:{},bl2:{}};
+function decisionStorageKey(env){return 'blx-vinculos-humanos-v1-'+env;}
+for(const env of ['com','sem','bl2']){try{const saved=JSON.parse(panelStorage.getItem(decisionStorageKey(env))||'{}');if(saved&&typeof saved==='object'&&!Array.isArray(saved))humanDecisions[env]=Object.fromEntries(Object.entries(saved).map(([key,value])=>[value?.cidade&&value?.bairro&&value?.loja?sellerKey(value.cidade,value.bairro,value.loja):key,value]));}catch{}}
+function persistDecisions(env,next){try{panelStorage.setItem(decisionStorageKey(env),JSON.stringify(next));humanDecisions[env]=next;return true;}catch{return false;}}
+function assignmentKey(row){return [row.motorista,row.rota,row.placa,row.unigis].map(exactValue).join('|');}
+function operationFor(env){return env==='bl2'?'BL2':'BLX';}
+function driverCatalog(model,env){const choices=new Map();for(const row of model){if(exactValue(row.base)!==operationFor(env)||![row.motorista,row.rota,row.placa,row.unigis].every(exactValue))continue;choices.set(assignmentKey(row),{motorista:row.motorista,rota:row.rota,placa:row.placa,unigis:row.unigis,base:operationFor(env)});}return [...choices.values()].sort((a,b)=>String(a.motorista).localeCompare(String(b.motorista),'pt-BR')||Number(a.rota)-Number(b.rota));}
+function storeBases(env){try{panelStorage.setItem(baseStorageKey(env),JSON.stringify(savedBases[env]));return true;}catch{return false;}}
+
+
+function normal(value) {
+  return String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function key(city, bairro) { return normal(city) + '|' + normal(bairro); }
+function compactDriver(name) { return String(name ?? '').replace(/\s*-\s*[A-Z0-9]{6,8}\s*$/i,'').trim(); }
+function safe(value) { return String(value ?? '').replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[character])); }
+function message(env, text, type='') {
+  const el = document.getElementById(env + '-message');
+  el.textContent = text; el.className = 'message show ' + type;
+}
+const organizerVersions={com:0,sem:0,bl2:0};
+function clearOrganizer(env){states[env]={};updateOrganizerExports(env);document.getElementById(env+'-view').disabled=true;document.getElementById(env+'-preview').innerHTML='';document.getElementById(env+'-metrics').hidden=true;document.getElementById(env+'-decisions').innerHTML='';if(typeof invalidateOrganizer==='function')invalidateOrganizer(env);}
+async function removeAttachment(env,type){
+ if(typeof isOperationBusy==='function' && (isOperationBusy(typeof env==='undefined'?'BLX':operationFor(env))||submitting))return;
+ if(env==='bl2' && typeof discardBL2Revision==='function'){try{await discardBL2Revision();}catch(error){message(env,error.message,'error');return;}}
+ if(type==='model'){try{panelStorage.removeItem(baseStorageKey(env));}catch{message(env,'Não foi possível excluir o modelo salvo.','error');return;}savedBases[env]={};}
+ const input=document.getElementById(env+'-'+type);input.value='';input.dispatchEvent(new Event('change',{bubbles:true}));
+ message(env,type==='model'?'Modelo removido. Os vínculos humanos salvos serão conferidos contra o próximo modelo.':'Planilha do cliente removida. O modelo continua salvo.');
+}
+function copyFrequencyModel(){
+ if(typeof isOperationBusy==='function' && (isOperationBusy(typeof env==='undefined'?'BLX':operationFor(env))||submitting))return;
+ if(!savedBases.com.model?.length){message('sem','Carregue o modelo na BLX com frequência ou selecione o arquivo de modelo aqui.','error');return;}
+ if(savedBases.sem.model?.length){message('sem','Já existe um modelo neste ambiente. Exclua-o antes de copiar outro.','error');return;}
+ const copy=JSON.parse(JSON.stringify(savedBases.com));
+ try{panelStorage.setItem(baseStorageKey('sem'),JSON.stringify(copy));}catch{message('sem','Não foi possível salvar o modelo neste navegador. Selecione o arquivo neste ambiente.','error');return;}
+ savedBases.sem=copy;document.getElementById('sem-model').value='';++organizerVersions.sem;clearOrganizer('sem');
+ document.getElementById('sem-model').closest('.upload').querySelector('span').textContent='Modelo salvo · '+copy.modelName;
+ message('sem','Modelo da BLX com frequência copiado. Agora clique em Organizar. As decisões humanas continuam separadas por ambiente.','ok');
+}
+function fileName(env,type){
+ const input=document.getElementById(env+'-'+type),label=input.closest('.upload').querySelector('span');let version=0;
+ if(type==='model' && savedBases[env].model?.length)label.textContent='Modelo salvo · '+savedBases[env].modelName;
+ input.addEventListener('change',async()=>{
+ const current=++version;++organizerVersions[env];clearOrganizer(env);const file=input.files[0];
+ if(type==='client'||type==='custom'){
+ label.textContent=file?file.name:(type==='custom'?'Opcional · formato alternativo BLX':'Obrigatória · arquivo do dia');
+ if(file && env!=='bl2'){
+  const other=document.getElementById(env+'-'+(type==='client'?'custom':'client'));
+  if(other){other.value='';other.closest('.upload').querySelector('span').textContent=type==='client'?'Opcional · formato alternativo BLX':'Obrigatória · arquivo do dia';}
+ }
+ return;
+}
+ if(!file){label.textContent=savedBases[env].model?.length?'Modelo salvo · '+savedBases[env].modelName:'Obrigatório · modelo unificado '+operationFor(env);return;}
+ savedBases[env]={};storeBases(env);label.textContent='Lendo · '+file.name;
+ try{await ensureXlsx();const book=await readWorkbook(file);const model=unifiedBookRows(book,env);
+ if(current!==version)return;savedBases[env]={model,modelName:file.name};const stored=storeBases(env);
+ label.textContent=(stored?'Modelo salvo · ':'Carregado nesta página · ')+file.name;
+ message(env,stored?'Modelo unificado salvo neste ambiente. Agora selecione a planilha do cliente.':'Modelo carregado nesta página; o navegador não permitiu salvar a base.','ok');
+ }catch(error){if(current===version){label.textContent='Modelo inválido · '+file.name;message(env,error.message,'error');}}
+ });
+}
+['com','sem','bl2'].forEach(env=>['model','client'].forEach(type=>fileName(env,type)));
+['com','sem'].forEach(env=>fileName(env,'custom'));
+
+function ensureXlsx() {
+  if (window.XLSX) return Promise.resolve();
+  if (window._xlsxLoading) return window._xlsxLoading;
+  window._xlsxLoading = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = './xlsx.js';
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('Não foi possível carregar o leitor de planilhas. Abra o arquivo com conexão à internet e tente novamente.'));
+    document.head.appendChild(script);
+  });
+  return window._xlsxLoading;
+}
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src; script.onload = resolve;
+    script.onerror = () => reject(new Error('Não foi possível carregar o gerador de PDF. Abra o arquivo com conexão à internet e tente novamente.'));
+    document.head.appendChild(script);
+  });
+}
+async function ensurePdf() {
+  if (window.jspdf?.jsPDF && window.jspdf?.jsPDF.API.autoTable) return;
+  if (!window._pdfLoading) window._pdfLoading = (async () => {
+    if (!window.jspdf?.jsPDF) await loadScript('./jspdf.js');
+    if (!window.jspdf?.jsPDF?.API.autoTable) await loadScript('./autotable.js');
+  })();
+  return window._pdfLoading;
+}
+async function readWorkbook(file) {
+  const buffer = await file.arrayBuffer();
+  const book = XLSX.read(buffer, {type:'array', cellDates:true});
+  const name = book.SheetNames[0];
+  const sheet = book.Sheets[name];
+  const data = XLSX.utils.sheet_to_json(sheet, {header:1, defval:'', raw:false});
+  if (!data.length) throw new Error('A planilha não possui linhas para organizar.');
+  return {book, name, sheet, data};
+}
+function headerIndex(headers, names) {
+  const desired = names.map(normal);
+  return headers.findIndex(header => desired.includes(normal(header)));
+}
+function exactValue(value){return String(value??'').normalize('NFC').trim().replace(/\s+/g,' ').toUpperCase();}
+function locationValue(value){return exactValue(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
+function sellerKey(city,bairro,loja){return [city,bairro,loja].map(locationValue).join('|');}
+function unifiedRows(table,env){
+ const h=table[0]||[],city=headerIndex(h,['Cidade','Município','Localidades','Localidade','Localidad']),bairro=headerIndex(h,['Bairro','Bairros','Barrio']),loja=headerIndex(h,['Loja','Seller','Embarcador','Loja/Embarcador']),driver=headerIndex(h,['Motorista real','Motorista']),route=headerIndex(h,['Rota','Route']),plate=headerIndex(h,['Placa']),unigis=headerIndex(h,['Nome no Unigis','Nome UNIGIS']),status=headerIndex(h,['Status']),reason=headerIndex(h,['Motivo da pendência']),base=headerIndex(h,['Base','Depósito','Deposito']);
+ if([city,bairro,loja,driver,route,plate,unigis].some(i=>i<0))throw Error('Modelo inválido: use o Excel unificado com Cidade/Localidades, Bairro, Loja/Embarcador, Motorista, Rota, Placa e Nome UNIGIS.');
+ const rows=table.slice(1).filter(r=>r.some(v=>String(v??'').trim())).map(r=>({cidade:r[city],bairro:r[bairro],loja:r[loja],motorista:r[driver],rota:r[route],placa:r[plate],unigis:r[unigis],status:status<0?'':r[status],reason:reason<0?'':r[reason],base:base<0?operationFor(env):r[base]}));
+ if(!rows.length)throw Error('O modelo unificado não contém registros.');return rows;
+}
+function unifiedBookRows(book,env){
+ const guide=book.book.Sheets['Como usar'];
+ const title=guide?.A2?.v;
+ if(env==='bl2' && normal(title).startsWith('MODELO BLX'))throw Error('Este modelo é BLX. Selecione um modelo BL2.');
+ if(env!=='bl2' && normal(title).startsWith('MODELO BL2'))throw Error('Este modelo é BL2. Selecione um modelo BLX.');
+ // Prefer the consolidated sheet and never use the original source tabs as fallback.
+ const name=book.book.SheetNames.find(n=>normal(n)==='MODELO UNIFICADO');
+ const table=name?XLSX.utils.sheet_to_json(book.book.Sheets[name],{header:1,defval:'',raw:false}):book.data;
+ const rows=unifiedRows(table,env);
+ if(rows.some(r=>exactValue(r.base)!==operationFor(env)))throw Error('O modelo contém uma base diferente de '+operationFor(env)+'. Use o modelo próprio desta operação.');
+ const originalName=book.book.SheetNames.find(n=>normal(n)==='MOTORISTAS ORIGINAL');
+ if(originalName){
+ const data=XLSX.utils.sheet_to_json(book.book.Sheets[originalName],{header:1,defval:'',raw:false}),h=data[0]||[];
+ const driver=headerIndex(h,['Motorista real','Motorista']),route=headerIndex(h,['Rota']),plate=headerIndex(h,['Placa']),unigis=headerIndex(h,['Nome no Unigis','Nome UNIGIS']);
+ if([driver,route,plate,unigis].every(i=>i>=0))for(const r of data.slice(1)){if([r[driver],r[route],r[plate],r[unigis]].every(exactValue))rows.push({catalogOnly:true,cidade:'',bairro:'',loja:'',motorista:r[driver],rota:r[route],placa:r[plate],unigis:r[unigis],base:operationFor(env),status:'VINCULO_EXATO'});}
+ }return rows;
+}
+function createIndex(model,env){
+ const cities=new Map();
+ for(const row of model){
+ if(row.catalogOnly)continue;
+ const city=locationValue(row.cidade),bairro=locationValue(row.bairro),loja=locationValue(row.loja);
+ if(!cities.has(city))cities.set(city,new Map());const bairros=cities.get(city);
+ if(!bairros.has(bairro))bairros.set(bairro,new Map());const lojas=bairros.get(bairro);
+ if(!lojas.has(loja))lojas.set(loja,[]);lojas.get(loja).push(row);
+ }return {model,cities,env,catalog:driverCatalog(model,env)};
+}
+function resolveRecord(record,index){
+ const pending=reason=>({match:null,status:'AGUARDANDO_DECISAO_HUMANA',reason,humanApproved:false,routeChanged:false,routeConfirmation:''});
+
+ if(![record.cidade,record.bairro,record.loja].every(exactValue))return pending('Cidade, bairro ou loja ausente.');
+ const learned=index.env?humanDecisions[index.env][sellerKey(record.cidade,record.bairro,record.loja)]:null;
+ if(learned){const approved=index.catalog.find(r=>assignmentKey(r)===assignmentKey(learned));if(!approved)return pending('O motorista/rota do vínculo salvo mudou no modelo. Escolha e grave novamente.');return assignedRecord(record,approved,'Decisão humana salva',true);}
+ const bairros=index.cities.get(locationValue(record.cidade));
+ if(!bairros)return pending('Cidade sem correspondência exata no modelo.');
+ const lojas=bairros.get(locationValue(record.bairro));
+ if(!lojas)return pending('Bairro sem correspondência exata dentro da cidade do modelo.');
+ const rows=lojas.get(locationValue(record.loja))||[];
+ if(!rows.length)return pending('Loja sem correspondência exata dentro da cidade e do bairro do modelo.');
+ if(rows.some(r=>exactValue(r.base)!==operationFor(index.env)))return pending('Cadastro com base diferente de '+operationFor(index.env)+'.');
+ const flagged=rows.find(r=>exactValue(r.status) && exactValue(r.status)!=='VINCULO_EXATO');
+ if(flagged)return pending(flagged.reason||'Vínculo pendente de decisão humana no modelo.');
+ if(rows.some(r=>![r.motorista,r.rota,r.placa,r.unigis].every(exactValue)))return pending('Motorista, rota, placa ou nome UNIGIS ausente no modelo.');
+ const options=new Map(rows.map(r=>[[r.motorista,r.rota,r.placa,r.unigis].map(exactValue).join('|'),r]));
+ if(options.size!==1)return pending('Múltiplas opções de motorista, rota, placa ou nome UNIGIS para a loja.');
+ const match=[...options.values()][0];
+ return assignedRecord(record,match,'Cidade → Bairro → Loja: vínculo do modelo');
+}
+// Personalized demand: only location identifies the assignment. Keep all source cells for export.
+function resolvePersonalizedRecord(record,index){
+ return resolveRecord({cidade:record.cidade,bairro:record.bairro,loja:record.loja,sourceRoute:''},index);
+}
+function markExtraRoutes(client,env){
+ const limit=env==='com'?28:env==='sem'?24:null;if(!limit)return;
+ const routes=[...new Set(client.rows.map(r=>exactValue(r.sourceRoute)).filter(Boolean))];
+ const obvious=routes.filter(r=>/^\d+$/.test(r)&&Number(r)>limit||/\bEXTRA\b/.test(r));
+ for(const r of client.rows){r.extraRoute=obvious.includes(exactValue(r.sourceRoute))||(routes.length>limit&&!obvious.length);r.extraApproved=false;}
+}
+function approveExtraRecord(state,record){for(const item of state.results)if(sellerKey(item.record.cidade,item.record.bairro,item.record.loja)===sellerKey(record.cidade,record.bairro,record.loja)&&exactValue(item.record.sourceRoute)===exactValue(record.sourceRoute))item.record.extraApproved=true;}
+function resolveClientRecord(record,index,personalized){
+ if(record.extraRoute&&!record.extraApproved)return {match:null,status:'AGUARDANDO_DECISAO_HUMANA',reason:'Rota extra '+String(record.sourceRoute||'não identificada')+': defina o motorista para esta demanda antes de continuar.',humanApproved:false,routeChanged:false,routeConfirmation:''};
+ return personalized?resolvePersonalizedRecord(record,index):resolveRecord(record,index);
+}
+function assignedRecord(record,match,source,humanApproved=false){
+ const routeChanged=!!exactValue(record.sourceRoute)&&exactValue(record.sourceRoute)!==exactValue(match.rota);
+ const routeConfirmation=routeChanged?'Rota diária '+String(record.sourceRoute)+' → rota do modelo '+String(match.rota):exactValue(record.sourceRoute)?'Rota diária coincide com o modelo':'Rota fornecida pelo modelo';
+ return {match:{...match,source},status:'Organizada',reason:'',routeChanged,routeConfirmation,humanApproved};
+}
+function renderDecisions(env){
+ const state=states[env],el=document.getElementById(env+'-decisions');if(!state?.results?.length){el.innerHTML='';return;}
+ const unique=new Map();state.results.forEach((item,pos)=>{if(!item.match)if(!unique.has(sellerKey(item.record.cidade,item.record.bairro,item.record.loja)+(item.record.extraRoute?'|extra:'+item.record.sourceRoute:'')))unique.set(sellerKey(item.record.cidade,item.record.bairro,item.record.loja)+(item.record.extraRoute?'|extra:'+item.record.sourceRoute:''),{item,pos});});
+ if(!unique.size){el.innerHTML='';return;}
+ const catalog=state.index.catalog;
+ const rows=[...unique.values()].map(({item,pos})=>{
+ const r=item.record,current=item.humanApproved?assignmentKey(item.match):null;
+ const options=catalog.map((driver,i)=>'<option value="'+i+'"'+(current===assignmentKey(driver)?' selected':'')+'>'+safe(driver.motorista+' · Rota '+driver.rota+' · Placa '+driver.placa+' · UNIGIS '+driver.unigis)+'</option>').join('');
+ return '<div class="decision-item"><p><strong>'+safe(r.cidade)+' → '+safe(r.bairro)+' → '+safe(r.loja)+'</strong></p><p class="decision-note">'+safe(item.humanApproved?'Vínculo aprovado e salvo neste ambiente.':item.reason)+'</p><label>Motorista que atenderá esta cidade, bairro e loja<select id="'+env+'-choice-'+pos+'"><option value="">Escolha o motorista e a rota cadastrados</option>'+options+'</select></label><button class="action" onclick="saveHumanDecision(\''+env+'\','+pos+')">'+(item.humanApproved?'Atualizar vínculo salvo':'Gravar vínculo')+'</button>'+(item.humanApproved?'<button class="action secondary" onclick="removeHumanDecision(\''+env+'\','+pos+')">Excluir vínculo salvo</button>':'')+'<div id="'+env+'-decision-feedback-'+pos+'" class="decision-feedback" role="alert"></div></div>';
+ }).join('');
+ el.innerHTML='<section class="decision-panel"><h3>Decisão humana · escolher motorista e gravar vínculo</h3><p class="decision-note">Sua escolha será salva para esta Cidade + Bairro + Loja, somente neste ambiente. Escolha a opção completa do cadastro; a rota diária não escolhe o motorista.</p><div class="decision-list">'+rows+'</div></section>';
+}
+function refreshDecisions(env){
+ const state=states[env];state.index=createIndex(state.model,env);state.results.forEach(item=>Object.assign(item,resolveClientRecord(item.record,state.index,state.personalized)));
+ renderMetrics(env,state.results,state.model);renderPreview(env);updateOrganizerExports(env);
+ const pending=state.results.filter(r=>!r.match).length;message(env,pending?pending+' ordem(ns) aguardam decisão humana. Os vínculos aprovados já foram aplicados.':'Todas as ordens organizadas. Os vínculos aprovados foram salvos para as próximas planilhas.',pending?'':'ok');
+ if(typeof invalidateOrganizer==='function')invalidateOrganizer(env);
+}
+function saveHumanDecision(env,pos){
+ const state=states[env],item=state?.results?.[pos],choice=document.getElementById(env+'-choice-'+pos),feedback=document.getElementById(env+'-decision-feedback-'+pos);
+ if(!item||!choice)return;
+ if(choice.value===''){feedback.textContent='Escolha o motorista antes de gravar.';return;}
+ if(![item.record.cidade,item.record.bairro,item.record.loja].every(exactValue)){feedback.textContent='Corrija Cidade, Bairro e Loja antes de gravar o vínculo.';return;}
+ const driver=state.index.catalog[Number(choice.value)];if(!driver){feedback.textContent='Opção inválida. Selecione um motorista cadastrado.';return;}
+ const key=sellerKey(item.record.cidade,item.record.bairro,item.record.loja),next={...humanDecisions[env],[key]:{...driver,cidade:item.record.cidade,bairro:item.record.bairro,loja:item.record.loja,approvedAt:new Date().toISOString()}};
+ if(!persistDecisions(env,next)){feedback.textContent='O navegador não permitiu salvar. O vínculo não foi aplicado; tente novamente.';return;}
+ approveExtraRecord(state,item.record);refreshDecisions(env);
+}
+function removeHumanDecision(env,pos){const state=states[env],item=state?.results?.[pos];if(!item)return;const next={...humanDecisions[env]};delete next[sellerKey(item.record.cidade,item.record.bairro,item.record.loja)];if(!persistDecisions(env,next)){message(env,'Não foi possível excluir o vínculo salvo.','error');return;}refreshDecisions(env);}
+
+function asRoute(value) { const n=Number(value); return Number.isFinite(n)&&String(value).trim()!==''?n:value; }
+function clientRecords(table,env) {
+ const headers=table[0].map(v=>String(v??'').trim());
+ const alternative=headerIndex(headers,['Fantasia (Seller)'])>=0;
+ if(alternative){
+  if(env==='bl2')throw Error('Esta via alternativa é BLX. Use um arquivo próprio da BL2.');
+  const baseCol=headerIndex(headers,['Base']);
+  if(baseCol<0 || table.slice(1).filter(r=>r.some(v=>String(v??'').trim())).some(r=>exactValue(r[baseCol])!=='BLX'))throw Error('A via alternativa precisa identificar BLX na coluna Base em todas as linhas.');
+ }
+
+ const cityCol=headerIndex(headers,['Localidad','Localidade','Localidades','Cidade','Município']),bairroCol=headerIndex(headers,['Barrio','Bairro','Bairros']),lojaCol=['Loja','Embarcador','Loja/Embarcador','Seller','Fantasia (Seller)','Descripcion','Descrição','ClienteOrden - Razón Social'].map(name=>headerIndex(headers,[name])).find(i=>i>=0)??-1;
+ if([cityCol,bairroCol,lojaCol].some(i=>i<0)) throw Error('Cliente inválida: preciso de Cidade/Localidade, Bairro e Loja/Embarcador.');
+ const shopHeaders=['Loja','Seller','Fantasia (Seller)','Embarcador','Loja/Embarcador','Descripcion','Descrição','ClienteOrden - Razón Social'].map(normal);
+ const shopCols=headers.map((h,i)=>shopHeaders.includes(normal(h))?i:-1).filter(i=>i>=0);
+ let routeCol=headerIndex(headers,['Rota','Route']); if(routeCol<0){routeCol=headers.length;headers.push('Rota');}
+ return {headers,cityCol,bairroCol,routeCol,lojaCol,rows:table.slice(1).filter(r=>r.some(v=>String(v??'').trim())).map(row=>({values:[...row],cidade:row[cityCol],bairro:row[bairroCol],loja:row[lojaCol]??'',sourceRoute:row[routeCol]??''}))};
+}
+function updateOrganizerExports(env) {
+ const blocked=!states[env]?.results?.length || states[env].results.some(r=>!r.match || r.status==='AGUARDANDO_DECISAO_HUMANA');
+ document.getElementById(env+'-export').disabled=blocked;
+}
+function requireResolved(env) {
+ if(!states[env]?.results?.length || states[env].results.some(r=>!r.match || r.status==='AGUARDANDO_DECISAO_HUMANA')){message(env,'AGUARDANDO_DECISAO_HUMANA: resolva as pendências antes de exportar.','error');return false;}return true;
+}
+async function organize(env){
+ const version=++organizerVersions[env];clearOrganizer(env);
+ try{
+ const customFile=document.getElementById(env+'-custom')?.files[0];
+ const clientFile=customFile||document.getElementById(env+'-client').files[0],modelFile=document.getElementById(env+'-model').files[0];
+ if(!clientFile)throw Error('Selecione a planilha do cliente.');
+ if(!modelFile && !savedBases[env].model?.length)throw Error('Selecione o Modelo de Lojas e Motoristas unificado.');
+ message(env,'Cruzando a planilha do cliente com o modelo unificado…');await ensureXlsx();
+ const [clientBook,modelBook]=await Promise.all([readWorkbook(clientFile),modelFile?readWorkbook(modelFile):Promise.resolve(null)]);
+ if(version!==organizerVersions[env])return;
+ const inputModel=modelBook?unifiedBookRows(modelBook,env):savedBases[env].model;
+ const model=env==='bl2'?inputModel:await enrichLegacyCatalog(inputModel);
+ if(version!==organizerVersions[env])return;
+ if(customFile && headerIndex(clientBook.data[0],['Fantasia (Seller)'])<0)throw Error('Via personalizada inválida: esperado Cidade, Bairro, Fantasia (Seller) e Base BLX. Use o anexo normal para a planilha padrão.');
+ const client=clientRecords(clientBook.data,env);markExtraRoutes(client,env);const index=createIndex(model,env),results=client.rows.map(record=>({record,...resolveClientRecord(record,index,!!customFile)}));
+ savedBases[env]={model,modelName:modelFile?.name||savedBases[env].modelName};storeBases(env);
+ states[env]={clientBook,client,model,results,index,sourceFile:clientFile.name,personalized:!!customFile};
+ renderMetrics(env,results,model);renderPreview(env);updateOrganizerExports(env);document.getElementById(env+'-view').disabled=false;
+ const pending=results.filter(r=>!r.match).length,changed=results.filter(r=>r.routeChanged).length;
+ message(env,(results.length-pending)+' ordem(ns) organizadas por Cidade → Bairro → Loja. '+(pending?pending+' em AGUARDANDO_DECISAO_HUMANA. ':'')+(changed?changed+' rota(s) preenchidas pelo modelo em lugar da rota diária.':''),pending?'':'ok');
+ }catch(error){if(version===organizerVersions[env])message(env,error.message||'Não foi possível organizar.','error');}
+}
+function renderMetrics(env, results, model) {
+  const el = document.getElementById(env + '-metrics');
+  const organized = results.filter(item=>item.match).length;
+  const noRule = results.length-organized;
+  const routes = new Set(results.filter(item=>item.match).map(item=>String(item.match.rota))).size;
+  el.hidden=false;
+  el.innerHTML = '<div class="metric"><label>Ordens importadas</label><strong>'+results.length+'</strong></div>'+
+    '<div class="metric good"><label>Ordens organizadas</label><strong>'+organized+'</strong></div>'+
+    '<div class="metric '+(noRule?'warn':'good')+'"><label>Sem regra única</label><strong>'+noRule+'</strong></div>'+
+    '<div class="metric"><label>Rotas preenchidas</label><strong>'+routes+' / '+new Set(model.map(row=>String(row.rota))).size+'</strong></div>';
+}
+function renderPreview(env) {
+  renderDecisions(env);
+  const state = states[env], el = document.getElementById(env+'-preview');
+  const rows = state.results.slice(0,600).map((item, position) => {
+    const m = item.match;
+    return '<tr data-row="'+position+'" ondblclick="enableRowEdit(\''+env+'\','+position+')"><td data-field="rota">'+safe(m ? m.rota : '—')+'</td><td data-field="motorista"><button class="action secondary" style="white-space:normal;text-align:left" ondblclick="event.stopPropagation()" onclick="openDriverEditor(\''+env+'\','+position+')">'+safe(m ? m.motorista : 'Definir motorista')+' · Editar</button></td><td data-field="bairro">'+safe(item.record.bairro)+'</td><td data-field="cidade">'+safe(item.record.cidade)+'</td><td data-field="placa">'+safe(m ? m.placa || '—' : '—')+'</td><td>'+safe(item.record.loja)+'</td><td>'+safe(m?.unigis || '—')+'</td><td data-field="regra">'+(m ? '<span class="tag ok">'+safe(m.source)+'</span><br><small>'+safe(item.routeConfirmation || '')+'</small>' : '<span class="tag pending">AGUARDANDO_DECISAO_HUMANA</span> '+safe(item.reason))+'</td><td><button class="action secondary" ondblclick="event.stopPropagation()" onclick="openDriverEditor(\''+env+'\','+position+')">Trocar / cadastrar motorista</button></td></tr>';
+  }).join('');
+  el.innerHTML='<div id="'+env+'-driver-editor"></div><table><thead><tr><th>Rota</th><th>Motorista</th><th>Bairro</th><th>Cidade</th><th>Placa</th><th>Loja/Embarcador</th><th>Nome UNIGIS</th><th>Regra aplicada</th><th>Alterar motorista</th></tr></thead><tbody>'+rows+'</tbody></table><p class="muted" style="padding:10px 12px;margin:0">Dê dois cliques para corrigir cidade e bairro. Enter refaz o cruzamento exato. Use Trocar / cadastrar motorista para atualizar a referência salva.</p>'+'<button class="action secondary" onclick="downloadUpdatedReference(\''+env+'\')">Baixar referência atualizada</button>'+(state.results.length>600?'<p class="muted" style="padding:0 12px 10px;margin:0">Visualização limitada às primeiras 600 ordens.</p>':'');
+}
+function enableRowEdit(env, position) {
+  const row = document.querySelector('#'+env+'-preview tr[data-row="'+position+'"]');
+  if (!row || row.dataset.editing === 'true') return;
+  row.dataset.editing = 'true';
+  ['bairro','cidade'].forEach(field => {
+    const cell = row.querySelector('[data-field="'+field+'"]');
+    cell.contentEditable = 'true'; cell.classList.add('editing');
+  });
+  row.querySelector('[data-field="bairro"]').focus();
+  row.onkeydown = event => {
+    if (event.key === 'Enter') { event.preventDefault(); saveRowEdit(env, position); }
+    if (event.key === 'Escape') renderPreview(env);
+  };
+}
+function saveRowEdit(env, position) {
+  const row = document.querySelector('#'+env+'-preview tr[data-row="'+position+'"]');
+  const state = states[env], item = state.results[position];
+  if (!row || !item) return;
+  const value = field => row.querySelector('[data-field="'+field+'"]').textContent.trim();
+  const originalRoute = item.record.values[state.client.routeCol];
+  item.record.bairro = value('bairro'); item.record.cidade = value('cidade');
+  item.record.values[state.client.bairroCol] = item.record.bairro;
+  item.record.values[state.client.cityCol] = item.record.cidade;
+  const resolution=resolveClientRecord(item.record,state.index,state.personalized);
+  Object.assign(item,resolution);
+  renderMetrics(env,state.results,state.model);updateOrganizerExports(env);renderPreview(env);
+}
+function togglePreview(env) {
+  const el = document.getElementById(env+'-preview');
+  el.classList.toggle('show');
+  document.getElementById(env+'-view').textContent = el.classList.contains('show') ? 'Ocultar visualização' : 'Visualizar';
+}
+function downloadBlob(blob,name){
+ const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=name;link.style.display='none';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+}
+function downloadWorkbook(wb,name){downloadBlob(new Blob([XLSX.write(wb,{type:'array',bookType:'xlsx'})],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),name);}
+async function downloadSavedRevision(operation){
+ try{const response=await fetch('/api/revision-file?operation='+operation);if(!response.ok){let error;try{error=(await response.json()).error;}catch{}throw Error(error||'Não foi possível baixar a planilha.');}downloadBlob(await response.blob(),'PLANILHA_'+operation+'.xlsx');}catch(e){feedback(e,operation);}
+}
+function exportResult(env) {
+ if(typeof flushEdits==='function')flushEdits(env);
+ if(!requireResolved(env))return;
+ const state=states[env],headers=[...state.client.headers];
+ const column=name=>{let index=headerIndex(headers,[name]);if(index<0){index=headers.length;headers.push(name);}return index;};
+ const driverCol=column('Motorista'),plateCol=column('Placa'),unigisCol=column('Nome UNIGIS'),correctionCol=column('Correção');
+ const out=[headers,...state.results.map(item=>{const row=[...item.record.values];while(row.length<headers.length)row.push('');
+ row[state.client.routeCol]=asRoute(item.match.rota);row[driverCol]=item.match.motorista+(item.match.placa?' - '+item.match.placa:'');row[plateCol]=item.match.placa;row[unigisCol]=item.match.unigis;row[correctionCol]='';return row;})];
+ const ws=XLSX.utils.aoa_to_sheet(out);ws['!cols']=headers.map((h,i)=>({wch:i===driverCol||i===unigisCol?42:Math.min(36,Math.max(11,String(h).length+2))}));
+ const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Report');downloadWorkbook(wb,'ORDENS_ORGANIZADAS_'+operationFor(env)+(env==='bl2'?'':'_'+(env==='com'?'COM_FREQUENCIA':'SEM_FREQUENCIA'))+'.xlsx');
+}
+async function exportPdf(env) {
+  if (!requireResolved(env)) return;
+  const state = states[env];
+  if (!state?.results?.length) return;
+  try {
+    await ensurePdf();
+    const {jsPDF} = window.jspdf;
+    const doc = new jsPDF({orientation:'landscape', unit:'pt', format:'a4'});
+    const operation = env === 'bl2' ? 'BL2' : env === 'com' ? 'COM FREQUÊNCIA' : 'SEM FREQUÊNCIA';
+    doc.setFillColor(7,17,31); doc.rect(0,0,842,58,'F');
+    doc.setTextColor(239,247,255); doc.setFontSize(17); doc.text('BLIXX · Ordens organizadas',36,34);
+    doc.setTextColor(159,183,205); doc.setFontSize(9); doc.text('Operação '+operationFor(env)+' · '+operation,36,49);
+    doc.autoTable({
+      startY:76,
+      head:[['Rota','Motorista','Bairro','Cidade','Placa','Regra aplicada']],
+      body:state.results.map(item => {
+        const m=item.match || {};
+        return [m.rota ?? item.record.values[state.client.routeCol] ?? '',m.motorista ?? '',item.record.bairro ?? '',item.record.cidade ?? '',m.placa ?? '',m.source ?? 'Sem cobertura no modelo'];
+      }),
+      theme:'grid',
+      margin:{left:28,right:28,bottom:28},
+      styles:{fontSize:7,cellPadding:4,textColor:[22,39,57]},
+      headStyles:{fillColor:[16,37,59],textColor:[235,245,255],fontStyle:'bold'},
+      alternateRowStyles:{fillColor:[242,247,251]},
+      columnStyles:{0:{cellWidth:42},1:{cellWidth:195},2:{cellWidth:115},3:{cellWidth:115},4:{cellWidth:60},5:{cellWidth:155}}
+    });
+    const pages=doc.getNumberOfPages();
+    for(let page=1;page<=pages;page++) { doc.setPage(page); doc.setFontSize(8); doc.setTextColor(100,116,139); doc.text('Página '+page+' de '+pages,760,585,{align:'right'}); }
+    doc.save('ORDENS_ORGANIZADAS_BLX_'+(env==='com'?'COM_FREQUENCIA':'SEM_FREQUENCIA')+'.pdf');
+  } catch(error) { message(env,error.message || 'Não foi possível gerar o PDF.','error'); }
+}
+function driverEditLocked(env){return typeof isOperationBusy==='function'&&(isOperationBusy(operationFor(env))||submitting);}
+function openDriverEditor(env,pos){
+ if(driverEditLocked(env))return;const state=states[env],item=state?.results?.[pos];if(!item)return;
+ const current=item.match||{},catalog=state.index.catalog;
+ const field=(key,label,value)=>'<label style="display:block;margin:8px 0">'+label+'<input id="'+env+'-driver-'+key+'" style="display:block;width:100%;padding:10px" value="'+safe(value||'')+'"></label>';
+ document.getElementById(env+'-driver-editor').innerHTML='<section class="decision-panel"><h3>Trocar ou cadastrar motorista</h3><p>'+safe(item.record.cidade+' → '+item.record.bairro+' → '+item.record.loja)+'</p><label>Usar motorista cadastrado<select id="'+env+'-driver-existing" style="display:block;width:100%;padding:10px" onchange="fillDriverEditor(\''+env+'\')"><option value="">Preencher ou editar os dados abaixo</option>'+catalog.map((d,i)=>'<option value="'+i+'">'+safe(d.motorista+' · Rota '+d.rota+' · '+d.placa)+'</option>').join('')+'</select></label>'+field('name','Nome do motorista',current.motorista)+field('route','Rota',current.rota)+field('plate','Placa',current.placa)+field('unigis','Nome exatamente como está no UNIGIS',current.unigis)+'<label>Aplicar alteração<select id="'+env+'-driver-scope" style="display:block;width:100%;padding:10px"><option value="shop">Somente esta Cidade + Bairro + Loja</option>'+(item.match?'<option value="assignment" selected>Substituir este cadastro em todas as lojas vinculadas a este motorista, rota e placa neste ambiente</option>':'')+'</select></label><p>A referência salva neste painel será atualizada. A planilha aprovada anterior será invalidada.</p><button class="action" onclick="saveDriverEditor(\''+env+'\','+pos+')">Salvar motorista e referência</button> <button class="action secondary" onclick="document.getElementById(\''+env+'-driver-editor\').innerHTML=\'\'">Cancelar</button><p id="'+env+'-driver-error" role="alert"></p></section>';
+ if(item.match)document.getElementById(env+'-driver-editor').insertAdjacentHTML('beforeend','<button class="action secondary" onclick="deleteDriverRegistration(\''+env+'\','+pos+')">Excluir cadastro deste motorista e rota do modelo</button>');
+ document.getElementById(env+'-driver-editor').scrollIntoView({block:'nearest'});
+}
+function fillDriverEditor(env){const d=states[env].index.catalog[Number(document.getElementById(env+'-driver-existing').value)];if(document.getElementById(env+'-driver-existing').value===''||!d)return;for(const [key,prop]of [['name','motorista'],['route','rota'],['plate','placa'],['unigis','unigis']])document.getElementById(env+'-driver-'+key).value=d[prop];}
+function saveDriverEditor(env,pos){
+ if(driverEditLocked(env))return;const state=states[env],item=state?.results?.[pos];if(!item)return;
+ const fail=text=>{document.getElementById(env+'-driver-error').textContent=text;};
+ const read=key=>document.getElementById(env+'-driver-'+key).value.trim();
+ const d={motorista:read('name'),rota:read('route'),placa:read('plate').toUpperCase(),unigis:read('unigis'),base:operationFor(env)};
+ if(![d.motorista,d.rota,d.placa,d.unigis].every(exactValue))return fail('Preencha motorista, rota, placa e Nome UNIGIS.');
+ try{RotaValidation.validate([{trip:'1',route:d.rota,driver:d.unigis,plate:d.placa}],operationFor(env));}catch(e){return fail(e.message);}
+ if(![item.record.cidade,item.record.bairro,item.record.loja].every(exactValue))return fail('Preencha cidade, bairro e loja antes de salvar.');
+ const scope=document.getElementById(env+'-driver-scope').value,oldKey=item.match?assignmentKey(item.match):null,key=sellerKey(item.record.cidade,item.record.bairro,item.record.loja);
+ if(scope==='assignment'&&!oldKey)return fail('Selecione o vínculo da loja.');
+ const affected=r=>scope==='assignment'?assignmentKey(r)===oldKey:!r.catalogOnly&&sellerKey(r.cidade,r.bairro,r.loja)===key;
+ let model=state.model.map(r=>affected(r)?{...r,...d,status:'VINCULO_EXATO',reason:''}:r);
+ if(!model.some(r=>!r.catalogOnly&&sellerKey(r.cidade,r.bairro,r.loja)===key))model.push({...d,cidade:item.record.cidade,bairro:item.record.bairro,loja:item.record.loja,status:'VINCULO_EXATO',reason:''});
+ const next={...humanDecisions[env]};
+ if(scope==='assignment')for(const k of Object.keys(next))if(assignmentKey(next[k])===oldKey)next[k]={...next[k],...d,approvedAt:new Date().toISOString()};
+ next[key]={...d,cidade:item.record.cidade,bairro:item.record.bairro,loja:item.record.loja,approvedAt:new Date().toISOString()};
+ const base={...savedBases[env],model,modelName:savedBases[env].modelName||'Modelo atualizado no painel'};
+ const previousBase=panelStorage.getItem(baseStorageKey(env)),previousDecisions=panelStorage.getItem(decisionStorageKey(env));
+ try{panelStorage.setItem(baseStorageKey(env),JSON.stringify(base));panelStorage.setItem(decisionStorageKey(env),JSON.stringify(next));}
+ catch{try{if(previousBase===null)panelStorage.removeItem(baseStorageKey(env));else panelStorage.setItem(baseStorageKey(env),previousBase);if(previousDecisions===null)panelStorage.removeItem(decisionStorageKey(env));else panelStorage.setItem(decisionStorageKey(env),previousDecisions);}catch{}return fail('Não foi possível salvar. A alteração não foi aplicada.');}
+ savedBases[env]=base;humanDecisions[env]=next;state.model=model;
+ // Clear the file input so Organizar uses the updated saved reference, not the old file.
+ document.getElementById(env+'-model').value='';
+ document.getElementById(env+'-model').closest('.upload').querySelector('span').textContent='Modelo salvo · '+base.modelName+' · atualizado no painel';
+ approveExtraRecord(state,item.record);refreshDecisions(env);
+ message(env,'Motorista e referência salvos neste ambiente. Confira o resultado e baixe novamente a planilha organizada.','ok');
+}
+function deleteDriverRegistration(env,pos){
+ if(driverEditLocked(env))return;const state=states[env],old=state?.results?.[pos]?.match;if(!old)return;
+ const key=assignmentKey(old);
+ if(!confirm('Excluir '+old.motorista+' da rota '+old.rota+' neste modelo? As lojas vinculadas ficarão pendentes até definir outro motorista.'))return;
+ const model=state.model.filter(r=>!(r.catalogOnly&&assignmentKey(r)===key)).map(r=>assignmentKey(r)===key?{...r,motorista:'',placa:'',unigis:'',status:'AGUARDANDO_DECISAO_HUMANA',reason:'Motorista excluído do cadastro. Defina um novo motorista.'}:r);
+ const next=Object.fromEntries(Object.entries(humanDecisions[env]).filter(([,d])=>assignmentKey(d)!==key));
+ const base={...savedBases[env],model};const beforeBase=panelStorage.getItem(baseStorageKey(env)),beforeDecisions=panelStorage.getItem(decisionStorageKey(env));
+ try{panelStorage.setItem(baseStorageKey(env),JSON.stringify(base));panelStorage.setItem(decisionStorageKey(env),JSON.stringify(next));}catch{try{panelStorage.setItem(baseStorageKey(env),beforeBase);panelStorage.setItem(decisionStorageKey(env),beforeDecisions);}catch{}message(env,'Não foi possível salvar a exclusão.','error');return;}
+ savedBases[env]=base;humanDecisions[env]=next;state.model=model;document.getElementById(env+'-model').value='';refreshDecisions(env);message(env,'Cadastro excluído da referência salva. Defina os novos motoristas para resolver as pendências.');
+}
+
+async function downloadUpdatedReference(env){
+ const rows=savedBases[env].model;if(!rows?.length)return;await ensureXlsx();
+ const wb=XLSX.utils.book_new(),headers=['Cidade','Bairro','Loja/Embarcador','Motorista','Rota','Placa','Nome UNIGIS','Base','Status','Motivo da pendência'];
+ XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([headers,...rows.filter(r=>!r.catalogOnly).map(r=>[r.cidade,r.bairro,r.loja,r.motorista,r.rota,r.placa,r.unigis,r.base,r.status,r.reason])]),'Modelo Unificado');
+ XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['Motorista','Rota','Placa','Nome UNIGIS'],...driverCatalog(rows,env).map(r=>[r.motorista,r.rota,r.placa,r.unigis])]),'Motoristas Original');
+ downloadWorkbook(wb,'Modelo_'+operationFor(env)+'_'+env+'_Atualizado.xlsx');
+}
+
+</script>
+<script src="./validation.js"></script>
+<script src="./operation-contract.js"></script>
+<script src="./operations.js"></script>
+</body>
+</html>
